@@ -49,15 +49,29 @@ func (t *Tree) Add(pattern string, value string) {
 		nodKeys := strings.Split(pattern, "/")
 	l:
 		for _, key := range nodKeys {
-			for _, node := range currentNode.children {
-				if node.key == key {
-					currentNode = node
-					continue l
+			regex := fmtRegex(key)
+			if regex == nil {
+				for _, node := range currentNode.children {
+					if node.key == key {
+						currentNode = node
+						continue l
+					}
 				}
+				node := NewNode(key)
+				currentNode.children = append(currentNode.children, node)
+				currentNode = node
+			} else {
+				for _, node := range currentNode.regexChildren {
+					if node.key == key {
+						currentNode = node
+						continue l
+					}
+				}
+				node := NewNode(key)
+				node.regex = *regex
+				currentNode.regexChildren = append(currentNode.regexChildren, node)
+				currentNode = node
 			}
-			node := NewNode(key)
-			currentNode.children = append(currentNode.children, node)
-			currentNode = node
 		}
 	}
 	currentNode.value = value
