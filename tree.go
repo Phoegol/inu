@@ -1,6 +1,7 @@
 package inu
 
 import (
+	"net/http"
 	"regexp"
 	"strings"
 )
@@ -12,8 +13,7 @@ type (
 
 	Node struct {
 		key           string
-		value         string
-		path          string
+		value         *NodeValue
 		children      []*Node
 		regexChildren []*Node
 		regex         RegexInfo
@@ -25,6 +25,9 @@ type (
 	}
 
 	NodeValue struct {
+		handle    http.HandlerFunc
+		pathParam map[string]string
+		value     string
 	}
 )
 
@@ -41,9 +44,8 @@ func NewTree() *Tree {
 	}
 }
 
-func (t *Tree) Add(pattern string, value string) {
+func (t *Tree) Add(pattern string, value *NodeValue) {
 	var currentNode = t.root
-
 	if pattern != currentNode.key {
 		pattern = strings.TrimPrefix(pattern, "/")
 		nodKeys := strings.Split(pattern, "/")
@@ -74,33 +76,69 @@ func (t *Tree) Add(pattern string, value string) {
 			}
 		}
 	}
+	if currentNode.value != nil {
+		panic("this url has been defined!")
+	}
 	currentNode.value = value
 }
 
-func (t *Tree) Find(pattern string) *Node {
+func (t *Tree) Find(pattern string, suffix bool) (*Node, map[string]string) {
 	var currentNode = t.root
+	pathParam := make(map[string]string)
 	if pattern != currentNode.key {
 		pattern = strings.TrimPrefix(pattern, "/")
+		if suffix {
+			pattern = strings.TrimSuffix(pattern, "/")
+		}
 		nodKeys := strings.Split(pattern, "/")
-	l:
-		for _, key := range nodKeys {
-			for _, node := range currentNode.children {
-				if node.key == key {
-					currentNode = node
-					continue l
-				}
-			}
-			return nil
+		if nod, param := currentNode.Find(nodKeys, pathParam); nod != nil && nod.value != nil {
+			return nod, param
+		} else {
+			return nil, param
 		}
 	}
-	return currentNode
+	return currentNode, pathParam
+}
+
+func (n *Node) Find(nodKeys []string, pathParam map[string]string) (*Node, map[string]string) {
+	if len(nodKeys) == 0 {
+		return n, pathParam
+	}
+	key := nodKeys[0]
+	for _, node := range n.children {
+		if node.key == key {
+			return node.Find(nodKeys[1:], pathParam)
+		}
+	}
+	for _, node := range n.regexChildren {
+		if str := matchRegexNode(*node, key); str != "" {
+			if len(nodKeys) == 1 {
+				pathParam[node.regex.name] = key
+				return node, pathParam
+			}
+			nd, param := node.Find(nodKeys[1:], pathParam)
+			if nd != nil {
+				param[node.regex.name] = str
+				return nd, param
+			}
+		}
+	}
+	return nil, pathParam
+}
+
+func matchRegexNode(node Node, key string) string {
+	if node.regex.regex == nil {
+		return key
+	} else {
+		return string(node.regex.regex.Find([]byte(key)))
+	}
 }
 
 func fmtRegex(str string) *RegexInfo {
 	if !strings.HasPrefix(str, "{") || !strings.HasSuffix(str, "}") {
 		return nil
 	}
-	str = strings.TrimSuffix(strings.TrimSuffix(str, "{"), "}")
+	str = strings.TrimSuffix(strings.TrimPrefix(str, "{"), "}")
 	spIdx := strings.IndexAny(str, ":")
 	switch spIdx {
 	case -1:
