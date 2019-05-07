@@ -85,29 +85,33 @@ func (t *Tree) Add(pattern string, value *NodeValue) {
 func (t *Tree) Find(pattern string, suffix bool) (*Node, map[string]string) {
 	var currentNode = t.root
 	pathParam := make(map[string]string)
-	if pattern != currentNode.key {
-		pattern = strings.TrimPrefix(pattern, "/")
-		if suffix {
-			pattern = strings.TrimSuffix(pattern, "/")
-		}
-		nodKeys := strings.Split(pattern, "/")
-		if nod, param := currentNode.Find(nodKeys, pathParam); nod != nil && nod.value != nil {
-			return nod, param
+	if pattern == currentNode.key {
+		if currentNode.value != nil {
+			return currentNode, pathParam
 		} else {
-			return nil, param
+			return nil, pathParam
 		}
 	}
-	return currentNode, pathParam
+	pattern = strings.TrimPrefix(pattern, "/")
+	if suffix {
+		pattern = strings.TrimSuffix(pattern, "/")
+	}
+	nodKeys := strings.Split(pattern, "/")
+	if nod, param := currentNode.find(nodKeys, pathParam); nod != nil && nod.value != nil {
+		return nod, param
+	} else {
+		return nil, param
+	}
 }
 
-func (n *Node) Find(nodKeys []string, pathParam map[string]string) (*Node, map[string]string) {
+func (n *Node) find(nodKeys []string, pathParam map[string]string) (*Node, map[string]string) {
 	if len(nodKeys) == 0 {
 		return n, pathParam
 	}
 	key := nodKeys[0]
 	for _, node := range n.children {
 		if node.key == key {
-			return node.Find(nodKeys[1:], pathParam)
+			return node.find(nodKeys[1:], pathParam)
 		}
 	}
 	for _, node := range n.regexChildren {
@@ -116,7 +120,7 @@ func (n *Node) Find(nodKeys []string, pathParam map[string]string) (*Node, map[s
 				pathParam[node.regex.name] = key
 				return node, pathParam
 			}
-			nd, param := node.Find(nodKeys[1:], pathParam)
+			nd, param := node.find(nodKeys[1:], pathParam)
 			if nd != nil {
 				param[node.regex.name] = str
 				return nd, param
