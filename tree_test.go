@@ -1,12 +1,11 @@
 package inu
 
 import (
-	"fmt"
 	"testing"
 )
 
 func TestTree_Add(t *testing.T) {
-	tree := NewTree()
+	/*tree := NewTree()
 	tree.Add("/", &NodeValue{value: "hello1"})
 	tree.Add("/a/b/ccc/dqwe/a/", &NodeValue{value: "hello2"})
 	tree.Add("/a/b/dd/dqwe/a/", &NodeValue{value: "hello3"})
@@ -21,5 +20,5 @@ func TestTree_Add(t *testing.T) {
 		} else {
 			fmt.Println("NOT FOUND")
 		}
-	}
+	}*/
 }

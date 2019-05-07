@@ -1,7 +1,6 @@
 package inu
 
 import (
-	"net/http"
 	"regexp"
 	"strings"
 )
@@ -13,7 +12,8 @@ type (
 
 	Node struct {
 		key           string
-		value         *NodeValue
+		handle        Handler
+		interceptor   []HandlerInterceptor
 		children      []*Node
 		regexChildren []*Node
 		regex         RegexInfo
@@ -22,12 +22,6 @@ type (
 	RegexInfo struct {
 		name  string
 		regex *regexp.Regexp
-	}
-
-	NodeValue struct {
-		handle    http.HandlerFunc
-		pathParam map[string]string
-		value     string
 	}
 )
 
@@ -44,7 +38,7 @@ func NewTree() *Tree {
 	}
 }
 
-func (t *Tree) Add(pattern string, value *NodeValue) {
+func (t *Tree) Add(pattern string, handle Handler, interceptor []HandlerInterceptor) {
 	var currentNode = t.root
 	if pattern != currentNode.key {
 		pattern = strings.TrimPrefix(pattern, "/")
@@ -76,17 +70,18 @@ func (t *Tree) Add(pattern string, value *NodeValue) {
 			}
 		}
 	}
-	if currentNode.value != nil {
+	if currentNode.handle != nil {
 		panic("this url has been defined!")
 	}
-	currentNode.value = value
+	currentNode.handle = handle
+	currentNode.interceptor = interceptor
 }
 
 func (t *Tree) Find(pattern string, suffix bool) (*Node, map[string]string) {
 	var currentNode = t.root
 	pathParam := make(map[string]string)
 	if pattern == currentNode.key {
-		if currentNode.value != nil {
+		if currentNode.handle != nil {
 			return currentNode, pathParam
 		} else {
 			return nil, pathParam
@@ -97,7 +92,7 @@ func (t *Tree) Find(pattern string, suffix bool) (*Node, map[string]string) {
 		pattern = strings.TrimSuffix(pattern, "/")
 	}
 	nodKeys := strings.Split(pattern, "/")
-	if nod, param := currentNode.find(nodKeys, pathParam); nod != nil && nod.value != nil {
+	if nod, param := currentNode.find(nodKeys, pathParam); nod != nil && nod.handle != nil {
 		return nod, param
 	} else {
 		return nil, param
