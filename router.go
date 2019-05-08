@@ -3,6 +3,7 @@ package inu
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -17,23 +18,12 @@ var (
 )
 
 type (
-	Context struct {
-		w       http.ResponseWriter
-		req     *http.Request
-		pathVar map[string]string
-	}
 	Handler func(c *Context) interface{}
-
-	HandlerInterceptor interface {
-		preHandle(c *Context) bool
-		postHandle(c *Context)
-		afterCompletion(c *Context)
-	}
 
 	Router struct {
 		prefix           []string
 		trees            map[string]*Tree
-		interceptor      []HandlerInterceptor
+		interceptor      []InterceptorType
 		notFound         Handler
 		methodNotAllowed Handler
 		panic            func(c *Context, err interface{})
@@ -64,10 +54,14 @@ func New(prefix ...string) *Router {
 			trees:  make(map[string]*Tree),
 		}
 	}
-
 }
 
-func (r *Router) Handle(method string, path string, handle Handler, interceptor ...HandlerInterceptor) {
+func (r *Router) Use(interceptors ...HandlerInterceptor) {
+	for _, interceptor := range interceptors {
+		r.interceptor = append(r.interceptor, generateInterceptor(interceptor))
+	}
+}
+func (r *Router) Handle(method string, path string, handle Handler, interceptors []HandlerInterceptor) {
 	if _, ok := methods[method]; !ok {
 		panic(fmt.Errorf("invalid method"))
 	}
@@ -88,27 +82,31 @@ func (r *Router) Handle(method string, path string, handle Handler, interceptor 
 	} else {
 		tree.Add(path, handle, interceptor)
 	}*/
-	tree.Add(path, handle, interceptor)
+	arr := make([]InterceptorType, len(interceptors))
+	for _, interceptor := range interceptors {
+		arr = append(arr, generateInterceptor(interceptor))
+	}
+	tree.Add(path, handle, arr)
 }
 
-func (r *Router) GET(path string, handle Handler) {
-	r.Handle(http.MethodGet, path, handle)
+func (r *Router) GET(path string, handle Handler, interceptor ...HandlerInterceptor) {
+	r.Handle(http.MethodGet, path, handle, interceptor)
 }
 
-func (r *Router) POST(path string, handle Handler) {
-	r.Handle(http.MethodPost, path, handle)
+func (r *Router) POST(path string, handle Handler, interceptor ...HandlerInterceptor) {
+	r.Handle(http.MethodPost, path, handle, interceptor)
 }
 
-func (r *Router) DELETE(path string, handle Handler) {
-	r.Handle(http.MethodDelete, path, handle)
+func (r *Router) DELETE(path string, handle Handler, interceptor ...HandlerInterceptor) {
+	r.Handle(http.MethodDelete, path, handle, interceptor)
 }
 
-func (r *Router) PUT(path string, handle Handler) {
-	r.Handle(http.MethodPut, path, handle)
+func (r *Router) PUT(path string, handle Handler, interceptor ...HandlerInterceptor) {
+	r.Handle(http.MethodPut, path, handle, interceptor)
 }
 
-func (r *Router) PATCH(path string, handle Handler) {
-	r.Handle(http.MethodPatch, path, handle)
+func (r *Router) PATCH(path string, handle Handler, interceptor ...HandlerInterceptor) {
+	r.Handle(http.MethodPatch, path, handle, interceptor)
 }
 
 func (r *Router) NotFoundFunc(handler Handler) {
@@ -125,7 +123,7 @@ func (r *Router) PanicFunc(handler func(c *Context, err interface{})) {
 
 func (r *Router) notFoundHandle(c *Context) {
 	if r.notFound == nil {
-		http.NotFound(c.w, c.req)
+		http.NotFound(c.W, c.req)
 		return
 	}
 	r.notFound(c)
@@ -137,12 +135,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if r.panic != nil {
 		defer func() {
 			if err := recover(); err != nil {
-				r.panic(&Context{w: w, req: req}, err)
+				r.panic(&Context{W: w, req: req}, err)
 			}
 		}()
 	}
 	if _, ok := r.trees[req.Method]; !ok {
-		r.methodNotAllowed(&Context{w: w, req: req})
+		r.methodNotAllowed(&Context{W: w, req: req})
 		return
 	}
 	if len(r.prefix) > 0 {
@@ -155,15 +153,36 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			break
 		}
 		if notMatch {
-			r.notFoundHandle(&Context{w: w, req: req})
+			r.notFoundHandle(&Context{W: w, req: req})
 			return
 		}
 	}
 	if nd, param := r.trees[req.Method].Find(path, false); nd == nil {
-		r.notFoundHandle(&Context{w: w, req: req})
+		r.notFoundHandle(&Context{W: w, req: req})
 		return
 	} else {
-		// TODO interceptor环绕
-		nd.handle(&Context{w: w, req: req, pathVar: param})
+		cxt := &Context{W: w, req: req, pathVar: param}
+
+		// 最外部拦截器
+		for _, inp := range r.interceptor {
+			if !inp.preHandle(cxt) {
+				return
+			}
+		}
+		// 路由绑定拦截器
+		for _, inp := range nd.interceptor {
+			if !inp.preHandle(cxt) {
+				return
+			}
+		}
+
+		res := nd.handle(&Context{W: w, req: req, pathVar: param})
+		fmt.Println(res)
+
+		// TODO 环绕方法，返回结果渲染
 	}
+}
+
+func (r *Router) Run(port int) error {
+	return http.ListenAndServe(":"+strconv.Itoa(port), r)
 }
