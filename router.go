@@ -18,7 +18,7 @@ var (
 )
 
 type (
-	Handler func(c *Context) interface{}
+	Handler func(c *Context) (interface{}, RenderType)
 
 	Router struct {
 		prefix           []string
@@ -82,7 +82,7 @@ func (r *Router) Handle(method string, path string, handle Handler, interceptors
 	} else {
 		tree.Add(path, handle, interceptor)
 	}*/
-	arr := make([]InterceptorType, len(interceptors))
+	var arr []InterceptorType
 	for _, interceptor := range interceptors {
 		arr = append(arr, generateInterceptor(interceptor))
 	}
@@ -123,24 +123,35 @@ func (r *Router) PanicFunc(handler func(c *Context, err interface{})) {
 
 func (r *Router) notFoundHandle(c *Context) {
 	if r.notFound == nil {
-		http.NotFound(c.W, c.req)
+		http.NotFound(c.w, c.Req)
 		return
 	}
 	r.notFound(c)
 }
 
+func (r *Router) panicHandle(c *Context, err interface{}) {
+	if r.notFound == nil {
+		http.Error(c.w, fmt.Sprintf("failed to parse events: %v", err), http.StatusInternalServerError)
+		return
+	}
+	r.panic(c, err)
+}
+
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
+	header := w.Header()
+	cxt := &Context{w: w, Req: req, header: &header}
+	serve := false
 
-	if r.panic != nil {
-		defer func() {
-			if err := recover(); err != nil {
-				r.panic(&Context{W: w, req: req}, err)
-			}
-		}()
-	}
+	defer func() {
+		if rc := recover(); rc != nil {
+			r.panicHandle(cxt, rc)
+			return
+		}
+	}()
+
 	if _, ok := r.trees[req.Method]; !ok {
-		r.methodNotAllowed(&Context{W: w, req: req})
+		r.methodNotAllowed(cxt)
 		return
 	}
 	if len(r.prefix) > 0 {
@@ -153,34 +164,59 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			break
 		}
 		if notMatch {
-			r.notFoundHandle(&Context{W: w, req: req})
+			r.notFoundHandle(cxt)
 			return
 		}
 	}
 	if nd, param := r.trees[req.Method].Find(path, false); nd == nil {
-		r.notFoundHandle(&Context{W: w, req: req})
+		r.notFoundHandle(cxt)
 		return
 	} else {
-		cxt := &Context{W: w, req: req, pathVar: param}
+		cxt.PathVar = param
+		serve = true
+		var itcpts []InterceptorType
 
 		// 最外部拦截器
 		for _, inp := range r.interceptor {
 			if !inp.preHandle(cxt) {
+				serve = false
+				break
+			}
+			itcpts = append([]InterceptorType{inp}, itcpts...)
+		}
+		if serve {
+			// 路由绑定拦截器
+			for _, inp := range nd.interceptor {
+				if !inp.preHandle(cxt) {
+					serve = false
+					return
+				}
+				itcpts = append([]InterceptorType{inp}, itcpts...)
+			}
+		}
+		if serve {
+			res, renderType := nd.handle(cxt)
+			for _, itcpt := range itcpts {
+				if err := itcpt.postHandle(cxt); err != nil {
+					r.panicHandle(cxt, err)
+					return
+				}
+			}
+			if res != nil {
+				render(cxt.w, res, renderType)
+			}
+		}
+		for _, itcpt := range itcpts {
+			if err := itcpt.afterCompletion(cxt); err != nil {
+				r.panicHandle(cxt, err)
 				return
 			}
 		}
-		// 路由绑定拦截器
-		for _, inp := range nd.interceptor {
-			if !inp.preHandle(cxt) {
-				return
-			}
-		}
-
-		res := nd.handle(&Context{W: w, req: req, pathVar: param})
-		fmt.Println(res)
-
-		// TODO 环绕方法，返回结果渲染
 	}
+
+	// TODO afterCompletion待处理，write逻辑待处理
+
+	// TODO cookie和session待处理
 }
 
 func (r *Router) Run(port int) error {

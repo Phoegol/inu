@@ -2,8 +2,10 @@ package inu
 
 import "net/http"
 
+type Header http.Header
 type Context struct {
-	W       http.ResponseWriter
-	req     *http.Request
-	pathVar map[string]string
+	w       http.ResponseWriter
+	Req     *http.Request
+	PathVar map[string]string
+	header  *http.Header
 }

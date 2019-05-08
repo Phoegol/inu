@@ -1,11 +1,15 @@
 package inu
 
-type HandlerInterceptor func() (func(c *Context) bool, func(c *Context) error, func(c *Context) error)
+type HandlerInterceptor func() (InterceptorPreHandle, InterceptorPostHandle, InterceptorAfterCompletion)
+
+type InterceptorPreHandle func(c *Context) bool
+type InterceptorPostHandle func(c *Context) error
+type InterceptorAfterCompletion func(c *Context) error
 
 type InterceptorType struct {
-	preHandle       func(c *Context) bool
-	postHandle      func(c *Context) error
-	afterCompletion func(c *Context) error
+	preHandle       InterceptorPreHandle
+	postHandle      InterceptorPostHandle
+	afterCompletion InterceptorAfterCompletion
 }
 
 func generateInterceptor(i HandlerInterceptor) InterceptorType {
