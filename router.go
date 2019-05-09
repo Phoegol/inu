@@ -3,6 +3,7 @@ package inu
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -20,10 +21,17 @@ var (
 type (
 	Handler func(c *Context) (interface{}, RenderType)
 
+	staticDir struct {
+		prefix string
+		dir    string
+		list   bool
+	}
+
 	Router struct {
 		prefix           []string
 		trees            map[string]*Tree
 		interceptor      []InterceptorType
+		staticDirs       []staticDir
 		notFound         Handler
 		methodNotAllowed Handler
 		panic            func(c *Context, err interface{})
@@ -32,9 +40,12 @@ type (
 
 func New(prefix ...string) *Router {
 	if len(prefix) > 0 {
-		prefixes := make([]string, len(prefix), len(prefix))
+		prefixes := make([]string, 0)
+		hasRoot := false
 		for _, pre := range prefix {
-			if pre := strings.TrimSpace(pre); pre != "" {
+			if pre := strings.TrimSpace(pre); pre == "" || pre == "/" {
+				hasRoot = true
+			} else {
 				if !strings.HasPrefix(pre, "/") {
 					pre = "/" + pre
 				}
@@ -43,6 +54,9 @@ func New(prefix ...string) *Router {
 				}
 				prefixes = append(prefixes, pre)
 			}
+		}
+		if hasRoot {
+			prefixes = append(prefixes, "/")
 		}
 		return &Router{
 			prefix: prefixes,
@@ -56,6 +70,28 @@ func New(prefix ...string) *Router {
 	}
 }
 
+func (r *Router) Static(prefix string, dir string) {
+	prefix = strings.TrimSpace(prefix)
+	prefix = strings.Trim(prefix, "/")
+	if prefix == "" {
+		prefix = "/"
+	} else {
+		prefix = "/" + prefix + "/"
+	}
+	r.staticDirs = append(r.staticDirs, staticDir{prefix: prefix, dir: dir, list: false})
+}
+
+func (r *Router) StaticDir(prefix string, dir string) {
+	prefix = strings.TrimSpace(prefix)
+	prefix = strings.Trim(prefix, "/")
+	if prefix == "" {
+		prefix = "/"
+	} else {
+		prefix = "/" + prefix + "/"
+	}
+	r.staticDirs = append(r.staticDirs, staticDir{prefix: prefix, dir: dir, list: true})
+}
+
 func (r *Router) Use(interceptors ...HandlerInterceptor) {
 	for _, interceptor := range interceptors {
 		r.interceptor = append(r.interceptor, generateInterceptor(interceptor))
@@ -65,7 +101,6 @@ func (r *Router) Handle(method string, path string, handle Handler, interceptors
 	if _, ok := methods[method]; !ok {
 		panic(fmt.Errorf("invalid method"))
 	}
-
 	tree, ok := r.trees[method]
 	if !ok {
 		tree = NewTree()
@@ -74,14 +109,6 @@ func (r *Router) Handle(method string, path string, handle Handler, interceptors
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-
-	/*if len(r.prefix) > 0 {
-		for _, pre := range r.prefix {
-			tree.Add(pre+path, handle, interceptor)
-		}
-	} else {
-		tree.Add(path, handle, interceptor)
-	}*/
 	var arr []InterceptorType
 	for _, interceptor := range interceptors {
 		arr = append(arr, generateInterceptor(interceptor))
@@ -137,86 +164,114 @@ func (r *Router) panicHandle(c *Context, err interface{}) {
 	r.panic(c, err)
 }
 
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	path := req.URL.Path
-	header := w.Header()
-	cxt := &Context{w: w, Req: req, header: &header}
-	serve := false
-
-	defer func() {
-		if rc := recover(); rc != nil {
-			r.panicHandle(cxt, rc)
-			return
+func (r *Router) matchFile(path string) string {
+	for _, sDir := range r.staticDirs {
+		if strings.HasPrefix(path, sDir.prefix) {
+			file := sDir.dir + strings.TrimPrefix(path, sDir.prefix)
+			if f, err := os.Stat(file); err == nil && (!f.IsDir() || sDir.list) {
+				return file
+			}
 		}
-	}()
+	}
+	return ""
+}
 
-	if _, ok := r.trees[req.Method]; !ok {
+func (r *Router) staticHandle(w http.ResponseWriter, req *http.Request, path string) {
+	http.ServeFile(w, req, path)
+}
+
+func (r *Router) routerHandle(cxt *Context, nd *Node) {
+	// 判断请求方法
+	if _, ok := r.trees[cxt.Req.Method]; !ok {
 		r.methodNotAllowed(cxt)
 		return
 	}
-	if len(r.prefix) > 0 {
-		notMatch := true
-		for _, pre := range r.prefix {
-			if strings.HasPrefix(path, pre) {
-				path = strings.TrimPrefix(path, pre)
-			}
-			notMatch = false
+	serve := true
+	var itcpts []InterceptorType
+
+	// 最外部拦截器
+	for _, inp := range r.interceptor {
+		if !inp.preHandle(cxt) {
+			serve = false
 			break
 		}
-		if notMatch {
-			r.notFoundHandle(cxt)
-			return
-		}
+		itcpts = append([]InterceptorType{inp}, itcpts...)
 	}
-	if nd, param := r.trees[req.Method].Find(path, false); nd == nil {
-		r.notFoundHandle(cxt)
-		return
-	} else {
-		cxt.PathVar = param
-		serve = true
-		var itcpts []InterceptorType
-
-		// 最外部拦截器
-		for _, inp := range r.interceptor {
+	if serve {
+		// 路由绑定拦截器
+		for _, inp := range nd.interceptor {
 			if !inp.preHandle(cxt) {
 				serve = false
 				break
 			}
 			itcpts = append([]InterceptorType{inp}, itcpts...)
 		}
-		if serve {
-			// 路由绑定拦截器
-			for _, inp := range nd.interceptor {
-				if !inp.preHandle(cxt) {
-					serve = false
-					return
-				}
-				itcpts = append([]InterceptorType{inp}, itcpts...)
-			}
-		}
-		if serve {
-			res, renderType := nd.handle(cxt)
-			for _, itcpt := range itcpts {
-				if err := itcpt.postHandle(cxt); err != nil {
-					r.panicHandle(cxt, err)
-					return
-				}
-			}
-			if res != nil {
-				render(cxt.w, res, renderType)
-			}
-		}
+	}
+	if serve {
+		res, renderType := nd.handle(cxt)
 		for _, itcpt := range itcpts {
-			if err := itcpt.afterCompletion(cxt); err != nil {
+			if err := itcpt.postHandle(cxt); err != nil {
 				r.panicHandle(cxt, err)
 				return
 			}
+		}
+		if res != nil {
+			if err := render(cxt.w, res, renderType); err != nil {
+				r.panicHandle(cxt, err)
+				return
+			}
+		}
+	}
+	for _, itcpt := range itcpts {
+		if err := itcpt.afterCompletion(cxt); err != nil {
+			r.panicHandle(cxt, err)
+			return
 		}
 	}
 
 	// TODO afterCompletion待处理，write逻辑待处理
 
 	// TODO cookie和session待处理
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	path := req.URL.Path
+	header := w.Header()
+	cxt := &Context{w: w, Req: req, header: &header}
+
+	defer func() {
+		// 异常捕获
+		if rc := recover(); rc != nil {
+			r.panicHandle(cxt, rc)
+			return
+		}
+	}()
+	// 匹配前缀
+	if len(r.prefix) > 0 {
+		notMatch := true
+		for _, pre := range r.prefix {
+			if strings.HasPrefix(path, pre) {
+				if pre != "/" {
+					path = strings.TrimPrefix(path, pre)
+				}
+				notMatch = false
+				break
+			}
+		}
+		if notMatch {
+			r.notFoundHandle(cxt)
+			return
+		}
+	}
+	if file := r.matchFile(path); file != "" { // 静态资源匹配
+		r.staticHandle(cxt.w, cxt.Req, file)
+		return
+	} else if nd, param := r.trees[req.Method].Find(path, false); nd != nil { // 路由匹配
+		cxt.PathVar = param
+		r.routerHandle(cxt, nd)
+		return
+	}
+	r.notFoundHandle(cxt)
 }
 
 func (r *Router) Run(port int) error {

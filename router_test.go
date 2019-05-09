@@ -7,11 +7,13 @@ import (
 )
 
 func TestRouter_Run(t *testing.T) {
-	r := New()
+	r := New("/", "/asd", "")
 	/*	if err:=http.ListenAndServe(":8081",r);err!=nil{
 		log.Fatal(err)
 	}*/
 	r.Use(aaa, bbb, ccc)
+	r.Static("/", "./")
+	r.Static("/bbb", "./")
 	r.GET("/ping", func(c *Context) (interface{}, RenderType) {
 		c.header.Add("name", "cheivin")
 		return `{"name":"BeJson","page":88,"isNonProfit":true}`, Json
