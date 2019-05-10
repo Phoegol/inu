@@ -2,6 +2,7 @@ package inu
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -30,7 +31,7 @@ type (
 	Router struct {
 		prefix           []string
 		trees            map[string]*Tree
-		interceptor      []InterceptorType
+		interceptor      []HandlerInterceptor
 		staticDirs       []staticDir
 		notFound         Handler
 		methodNotAllowed Handler
@@ -93,9 +94,10 @@ func (r *Router) StaticDir(prefix string, dir string) {
 }
 
 func (r *Router) Use(interceptors ...HandlerInterceptor) {
-	for _, interceptor := range interceptors {
+	/*	for _, interceptor := range interceptors {
 		r.interceptor = append(r.interceptor, generateInterceptor(interceptor))
-	}
+	}*/
+	r.interceptor = append(r.interceptor, interceptors...)
 }
 func (r *Router) Handle(method string, path string, handle Handler, interceptors []HandlerInterceptor) {
 	if _, ok := methods[method]; !ok {
@@ -109,11 +111,11 @@ func (r *Router) Handle(method string, path string, handle Handler, interceptors
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	var arr []InterceptorType
+	/*var arr []InterceptorType
 	for _, interceptor := range interceptors {
 		arr = append(arr, generateInterceptor(interceptor))
-	}
-	tree.Add(path, handle, arr)
+	}*/
+	tree.Add(path, handle, interceptors)
 }
 
 func (r *Router) GET(path string, handle Handler, interceptor ...HandlerInterceptor) {
@@ -157,6 +159,8 @@ func (r *Router) notFoundHandle(c *Context) {
 }
 
 func (r *Router) panicHandle(c *Context, err interface{}) {
+	log.SetPrefix("[inu]")
+	log.Println(err)
 	if r.notFound == nil {
 		http.Error(c.w, fmt.Sprintf("failed to parse events: %v", err), http.StatusInternalServerError)
 		return
@@ -187,30 +191,30 @@ func (r *Router) routerHandle(cxt *Context, nd *Node) {
 		return
 	}
 	serve := true
-	var itcpts []InterceptorType
+	var itcpts []HandlerInterceptor
 
 	// 最外部拦截器
 	for _, inp := range r.interceptor {
-		if !inp.preHandle(cxt) {
+		if !inp.PreHandle(cxt) {
 			serve = false
 			break
 		}
-		itcpts = append([]InterceptorType{inp}, itcpts...)
+		itcpts = append([]HandlerInterceptor{inp}, itcpts...)
 	}
 	if serve {
 		// 路由绑定拦截器
 		for _, inp := range nd.interceptor {
-			if !inp.preHandle(cxt) {
+			if !inp.PreHandle(cxt) {
 				serve = false
 				break
 			}
-			itcpts = append([]InterceptorType{inp}, itcpts...)
+			itcpts = append([]HandlerInterceptor{inp}, itcpts...)
 		}
 	}
 	if serve {
 		res, renderType := nd.handle(cxt)
 		for _, itcpt := range itcpts {
-			if err := itcpt.postHandle(cxt); err != nil {
+			if err := itcpt.PostHandle(cxt); err != nil {
 				r.panicHandle(cxt, err)
 				return
 			}
@@ -223,7 +227,7 @@ func (r *Router) routerHandle(cxt *Context, nd *Node) {
 		}
 	}
 	for _, itcpt := range itcpts {
-		if err := itcpt.afterCompletion(cxt); err != nil {
+		if err := itcpt.AfterCompletion(cxt); err != nil {
 			r.panicHandle(cxt, err)
 			return
 		}
@@ -243,7 +247,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// 异常捕获
 		if rc := recover(); rc != nil {
 			r.panicHandle(cxt, rc)
-			return
 		}
 	}()
 	// 匹配前缀

@@ -13,7 +13,7 @@ type (
 	Node struct {
 		key           string
 		handle        Handler
-		interceptor   []InterceptorType
+		interceptor   []HandlerInterceptor
 		children      []*Node
 		regexChildren []*Node
 		regex         RegexInfo
@@ -38,7 +38,7 @@ func NewTree() *Tree {
 	}
 }
 
-func (t *Tree) Add(pattern string, handle Handler, interceptor []InterceptorType) {
+func (t *Tree) Add(pattern string, handle Handler, interceptor []HandlerInterceptor) {
 	var currentNode = t.root
 	if pattern != currentNode.key {
 		pattern = strings.TrimPrefix(pattern, "/")
@@ -154,6 +154,6 @@ func fmtRegex(str string) *RegexInfo {
 	}
 }
 
-func (n *Node) getInterceptor(idx int) InterceptorType {
+func (n *Node) getInterceptor(idx int) HandlerInterceptor {
 	return n.interceptor[idx]
 }
